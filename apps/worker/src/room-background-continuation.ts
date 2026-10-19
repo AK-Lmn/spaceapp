@@ -133,9 +133,12 @@ maxMissionTokens: number | null = DEFAULT_ROOM_AGENT_MAX_MISSION_TOKENS): Promis
     agentAssistantMessageId: `agent_msg:bg-response-${input.continuationId}`,
     // Resolve the current native thread from the durable session when executing.
     agentThreadId: null, traceId: `trace:bg-${input.continuationId}`,
-    // The automatic continuation is a new trace id; link it to the source
-    // request's trace so one lookup still shows the whole mission.
-    ...(sourceTrace ? { traceLink: { traceId: sourceTrace.traceId, spanId: sourceTrace.parentId } } : {})
+    // The automatic continuation gets a new trace id. Clear the copied source
+    // traceparent so the new workflow span does not rejoin the source W3C
+    // trace, and link it to the source request's trace instead so one lookup
+    // still shows the whole mission.
+    traceparent: undefined,
+    traceLink: sourceTrace ? { traceId: sourceTrace.traceId, spanId: sourceTrace.parentId } : undefined
   } });
   try {
     const enqueued = await store.enqueueRoomAgentMission({

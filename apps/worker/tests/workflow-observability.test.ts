@@ -74,6 +74,51 @@ describe("workflow OTLP spans", () => {
     expect(activity!.parentSpanId).toBe(child!.spanId);
   }, 180_000);
 
+  it("keeps a different request trace on a child workflow and links the parent span", async () => {
+    spans.length = 0;
+    const worker = await testWorker();
+    const turnTraceId = "a".repeat(32);
+    const turnParentId = "abcdefabcdefabcd";
+    const turnTraceparent = `00-${turnTraceId}-${turnParentId}-01`;
+    await worker.runUntil(async () => {
+      await env.client.workflow.execute("traceSupervisor", {
+        taskQueue: "workflow-observability-test",
+        workflowId: `workflow-observability-supervisor-${Date.now()}`,
+        args: [{ traceparent, turnTraceparent }]
+      });
+    });
+
+    const supervisor = spans.find(span => span.name === "workflow traceSupervisor");
+    const child = spans.find(span => span.name === "workflow tracePing");
+    expect(supervisor).toBeDefined();
+    expect(child).toBeDefined();
+    expect(supervisor!.traceId).toBe(traceId);
+    expect(child!.traceId).toBe(turnTraceId);
+    expect(child!.parentSpanId).toBe(turnParentId);
+    expect(child!.links).toContainEqual({ traceId: supervisor!.traceId, spanId: supervisor!.spanId });
+  }, 180_000);
+
+  it("exports room, pane and mission identifiers from the turn input", async () => {
+    spans.length = 0;
+    const worker = await testWorker();
+    await worker.runUntil(async () => {
+      await env.client.workflow.execute("traceCorrelated", {
+        taskQueue: "workflow-observability-test",
+        workflowId: `workflow-observability-correlated-${Date.now()}`,
+        args: [{ traceparent, roomId: "room:corr01", paneId: "pane:corr01", roomAgentMissionId: "mission:corr01" }]
+      });
+    });
+
+    const workflowSpan = spans.find(span => span.name === "workflow traceCorrelated");
+    const activitySpan = spans.find(span => span.name === "activity ping");
+    expect(workflowSpan!.attributes).toMatchObject({
+      "space.room_id": "room:corr01", "space.pane_id": "pane:corr01", "space.mission_id": "mission:corr01"
+    });
+    expect(activitySpan!.attributes).toMatchObject({
+      "space.room_id": "room:corr01", "space.pane_id": "pane:corr01", "space.mission_id": "mission:corr01"
+    });
+  }, 180_000);
+
   it("links a continue-as-new run to the run it replaced", async () => {
     spans.length = 0;
     const worker = await testWorker();

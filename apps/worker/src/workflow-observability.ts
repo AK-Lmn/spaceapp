@@ -118,6 +118,49 @@ function inboundLinks(args: readonly unknown[], headers: Record<string, unknown>
   return links;
 }
 
+const identifierPattern = /^[A-Za-z0-9:._-]{1,240}$/;
+
+function findIdentifier(value: unknown, keys: readonly string[], depth: number): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  for (const key of keys) {
+    const candidate = record[key];
+    if (typeof candidate === "string" && identifierPattern.test(candidate)) return candidate;
+  }
+  if (depth <= 0) return null;
+  for (const key of nestedKeys) {
+    const found = findIdentifier(record[key], keys, depth - 1);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** Allowlisted room, pane and mission identifiers found in the workflow arguments. */
+function correlationAttributes(args: readonly unknown[]): Record<string, string> {
+  const attributes: Record<string, string> = {};
+  const lookups: ReadonlyArray<readonly [string, readonly string[]]> = [
+    ["space.room_id", ["roomId"]],
+    ["space.pane_id", ["paneId"]],
+    ["space.mission_id", ["missionId", "roomAgentMissionId"]]
+  ];
+  for (const [attribute, keys] of lookups) {
+    for (const arg of args) {
+      const found = findIdentifier(arg, keys, 2);
+      if (found) { attributes[attribute] = found; break; }
+    }
+  }
+  return attributes;
+}
+
+/** The first valid traceparent carried by a child workflow's arguments, if any. */
+function childTraceparent(args: readonly unknown[] | undefined): string | null {
+  for (const arg of args ?? []) {
+    const found = findTraceparent(arg, 2);
+    if (found) return found;
+  }
+  return null;
+}
+
 /**
  * Deterministic 16-hex span id per workflow run. Using the run id keeps the
  * value stable across replay, which a random id would not be.
@@ -170,6 +213,7 @@ export const interceptors: WorkflowInterceptorsFactory = () => {
         const inbound = parseTraceparent(inboundTraceparent(input.args, headers));
         trace = inbound ?? { traceId: rootTraceIdFor(info.runId), parentId: "", flags: "01" };
         links = inboundLinks(input.args, headers);
+        const correlation = correlationAttributes(input.args);
         startedAt = Date.now();
         let status = "COMPLETED";
         try {
@@ -192,7 +236,8 @@ export const interceptors: WorkflowInterceptorsFactory = () => {
               "space.workflow_id": info.workflowId,
               "space.run_id": info.runId,
               "space.status": status,
-              "space.duration_ms": Math.max(0, finishedAt - startedAt)
+              "space.duration_ms": Math.max(0, finishedAt - startedAt),
+              ...correlation
             },
             error: status === "FAILED",
             kind: 1,
@@ -211,9 +256,25 @@ export const interceptors: WorkflowInterceptorsFactory = () => {
       },
       startChildWorkflowExecution: (input, next) => {
         if (!trace) return next(input);
+        const headers = input.headers as Headers;
+        // A supervisor can run turns from different API requests. Keep the
+        // turn's own request trace as the child's parent and link the workflow
+        // span instead of overwriting the turn context.
+        const inherited = childTraceparent(input.options.args);
+        const parsed = parseTraceparent(inherited);
+        if (parsed && parsed.traceId !== trace.traceId) {
+          return next({
+            ...input,
+            headers: {
+              ...headers,
+              [TRACEPARENT_HEADER]: defaultPayloadConverter.toPayload(inherited as string),
+              [SPAN_LINK_HEADER]: defaultPayloadConverter.toPayload(`${trace.traceId}:${spanId}`)
+            }
+          });
+        }
         return next({
           ...input,
-          headers: traceHeaders(input.headers as Headers, trace, spanId, false)
+          headers: traceHeaders(headers, trace, spanId, false)
         });
       },
       continueAsNew: (input, next) => {

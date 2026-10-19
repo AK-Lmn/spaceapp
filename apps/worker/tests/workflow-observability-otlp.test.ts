@@ -15,6 +15,7 @@ const secret = "prompt-that-must-never-be-exported";
 
 const allowedAttributes = new Set([
   "space.workflow_type", "space.workflow_id", "space.run_id", "space.status",
+  "space.room_id", "space.pane_id", "space.mission_id",
   "space.activity_type", "space.outcome", "space.attempt",
   "space.reason_code", "space.category", "space.duration_ms"
 ]);
@@ -24,7 +25,7 @@ interface OtlpSpan {
   spanId: string;
   parentSpanId?: string;
   name: string;
-  attributes: Array<{ key: string }>;
+  attributes: Array<{ key: string; value?: { stringValue?: string; intValue?: string } }>;
   links?: Array<{ traceId: string; spanId: string }>;
 }
 
@@ -144,5 +145,31 @@ describe("workflow OTLP export", () => {
     const workflowSpan = received().find(span => span.name === "workflow traceBackground");
     expect(workflowSpan).toBeDefined();
     expect(workflowSpan!.links).toContainEqual(link);
+  }, 180_000);
+
+  it("exports room, pane and mission identifiers and never the prompt", async () => {
+    bodies = [];
+    const running = await worker();
+    await running.runUntil(async () => {
+      await env.client.workflow.execute("traceCorrelated", {
+        taskQueue: "workflow-otlp-test",
+        workflowId: `workflow-otlp-correlated-${Date.now()}`,
+        args: [{ traceparent, roomId: "room:otlp01", paneId: "pane:otlp01", roomAgentMissionId: "mission:otlp01", prompt: secret }]
+      });
+    });
+    await exporter.flush();
+
+    const spans = received();
+    const workflowSpan = spans.find(span => span.name === "workflow traceCorrelated")!;
+    const activitySpan = spans.find(span => span.name === "activity ping")!;
+    const stringAttributes = (span: OtlpSpan) =>
+      Object.fromEntries(span.attributes.map(attribute => [attribute.key, attribute.value?.stringValue]));
+    for (const span of [workflowSpan, activitySpan]) {
+      expect(stringAttributes(span)).toMatchObject({
+        "space.room_id": "room:otlp01", "space.pane_id": "pane:otlp01", "space.mission_id": "mission:otlp01"
+      });
+      for (const attribute of span.attributes) expect(allowedAttributes.has(attribute.key)).toBe(true);
+    }
+    expect(JSON.stringify(bodies)).not.toContain(secret);
   }, 180_000);
 });

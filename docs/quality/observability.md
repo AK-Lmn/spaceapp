@@ -235,19 +235,24 @@ Since 2026-10-19 the worker side exports the full workflow tree:
   failure category and duration only.
 - **Child workflows:** the parent workflow span is propagated through child
   workflow headers, so a child workflow and its activities nest under the parent.
+  When the child input already carries a different API request trace (the Room
+  Agent supervisor runs turns for several requests), the child keeps that trace
+  and adds the supervisor span as an OTLP link.
 - **Continue-as-new:** the next run keeps the trace and adds an OTLP span link to
   the run it replaced (the `space-span-link` header).
 - **Automatic background continuations:** these still start `trace:bg-<uuid>`
-  because the workflow ID embeds the trace ID, but the queued turn now carries a
-  `traceLink` to the source request trace, so the new workflow span links back to
-  the mission's originating trace.
+  because the workflow ID embeds the trace ID. The queued turn clears the copied
+  source `traceparent` so the new workflow span does not rejoin the source W3C
+  trace, and carries a `traceLink` to the source request trace, so the new
+  workflow span links back to the mission's originating trace.
 
 The exported attributes are an explicit allowlist: `space.workflow_type`,
-`space.workflow_id`, `space.run_id`, `space.status`, `space.activity_type`,
-`space.outcome`, `space.attempt`, `space.reason_code`, `space.category` and
-`space.duration_ms`. Prompts, responses, URLs, paths, headers,
-bodies and error text are never exported. A fake OTLP collector test asserts the
-posted JSON, the parent chain and the allowlist.
+`space.workflow_id`, `space.run_id`, `space.status`, `space.room_id`,
+`space.pane_id`, `space.mission_id`, `space.activity_type`, `space.outcome`,
+`space.attempt`, `space.reason_code`, `space.category` and `space.duration_ms`.
+Prompts, responses, URLs, paths, headers, bodies and error text are never
+exported. A fake OTLP collector test asserts the posted JSON, the parent chain
+and the allowlist.
 - **API:** a valid inbound `traceparent` is continued (same trace ID, new span).
   An invalid or missing header gets a new trace ID. Every API log line carries
   `w3cTraceId` (Fastify `childLoggerFactory`).
@@ -277,8 +282,10 @@ recorded history and asserts zero re-emitted spans. A workflow-task retry can ru
 the same run again and call the sink twice; both records carry the same
 `(traceId, spanId)` pair, so the collector should dedupe on that pair.
 
-A history without `traceparent` or `traceLink` parses exactly as before and emits
-no workflow span. Activity inputs are not part of Temporal's determinism check.
+A history without `traceparent` or `traceLink` gets a deterministic root trace
+derived from its run id, so its workflow span is also stable across replay.
+The interceptor adds only headers to activity and child commands; activity inputs
+and headers are not part of Temporal's determinism check.
 The workflow logic itself (`workflows.ts`, `room-supervisor-state.ts`,
 `turn-runtime-policy.ts`, `dot-goal-loop.ts`) is unchanged.
 

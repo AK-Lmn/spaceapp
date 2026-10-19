@@ -1,6 +1,6 @@
 import { proxyActivities, continueAsNew, executeChild } from "@temporalio/workflow";
 
-const { ping } = proxyActivities<{ ping(): Promise<string> }>({
+const { ping } = proxyActivities<{ ping(input?: unknown): Promise<string> }>({
   startToCloseTimeout: "10 seconds"
 });
 
@@ -25,4 +25,19 @@ export async function traceContinue(input: { traceparent: string; generation: nu
 export async function traceBackground(input: { traceLink: { traceId: string; spanId: string } }): Promise<string> {
   void input.traceLink;
   return await ping();
+}
+
+/**
+ * Cross-request supervisor: the child turn belongs to a different API request
+ * trace, so the child keeps that trace and links back to the parent span.
+ */
+export async function traceSupervisor(input: { traceparent: string; turnTraceparent: string }): Promise<string> {
+  return await executeChild(tracePing, { args: [{ traceparent: input.turnTraceparent }] });
+}
+
+/** Correlated turn: room, pane and mission ids must reach the workflow and activity spans. */
+export async function traceCorrelated(input: {
+  traceparent: string; roomId: string; paneId: string; roomAgentMissionId: string;
+}): Promise<string> {
+  return await ping(input);
 }
