@@ -1,6 +1,7 @@
 import {
   buildCodexAppServerTurnWorkflowId,
   buildRoomAgentSupervisorWorkflowId,
+  parseTraceparent,
   roomAgentSupervisorQueueItemSchema,
   spaceAgentRoomActionRequestSchema,
   type RoomAgentActionRecord,
@@ -110,6 +111,7 @@ maxMissionTokens: number | null = DEFAULT_ROOM_AGENT_MAX_MISSION_TOKENS): Promis
     }
   }
   const request = source.queueItem.turn.roomAgentOperatorRequest ?? source.queueItem.turn.prompt;
+  const sourceTrace = parseTraceparent(source.queueItem.turn.traceparent);
   const instructions = [
     "Background pane actions have settled. Their completion does not by itself complete the operator request.",
     "Continue the complete operator request below using the recorded results and fresh room:inspect/catalog evidence.",
@@ -130,7 +132,10 @@ maxMissionTokens: number | null = DEFAULT_ROOM_AGENT_MAX_MISSION_TOKENS): Promis
     agentUserMessageId: `agent_msg:bg-context-${input.continuationId}`,
     agentAssistantMessageId: `agent_msg:bg-response-${input.continuationId}`,
     // Resolve the current native thread from the durable session when executing.
-    agentThreadId: null, traceId: `trace:bg-${input.continuationId}`
+    agentThreadId: null, traceId: `trace:bg-${input.continuationId}`,
+    // The automatic continuation is a new trace id; link it to the source
+    // request's trace so one lookup still shows the whole mission.
+    ...(sourceTrace ? { traceLink: { traceId: sourceTrace.traceId, spanId: sourceTrace.parentId } } : {})
   } });
   try {
     const enqueued = await store.enqueueRoomAgentMission({

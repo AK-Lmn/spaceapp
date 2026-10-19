@@ -103,6 +103,16 @@ describe("durable background continuation", () => {
     expect(c.store.listSpaceAgentMessages(c.session.sessionId).filter(m => m.role === "user")).toHaveLength(1);
   });
 
+  it("links the automatic continuation to the source request trace", async () => {
+    const c = continuationFixture();
+    const result = await prepareBackgroundContinuation(c.input, c.store);
+    if (result.state !== "READY") throw Error("Missing continuation");
+    expect(result.item.turn.traceLink).toEqual({
+      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+      spanId: "00f067aa0ba902b7"
+    });
+  });
+
   it("reuses the committed continuation after a lost activity reply", async () => {
     const c = continuationFixture();
     const enqueue = c.store.enqueueRoomAgentMission.bind(c.store);
