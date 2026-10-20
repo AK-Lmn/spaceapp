@@ -136,6 +136,28 @@ describe("workflow OTLP spans", () => {
     expect(runs[1].links).toContainEqual({ traceId, spanId: runs[0].spanId });
   }, 180_000);
 
+  it("starts a background continuation in a new trace and links the source", async () => {
+    spans.length = 0;
+    const worker = await testWorker();
+    const link = { traceId: "c".repeat(32), spanId: "d".repeat(16) };
+    await worker.runUntil(async () => {
+      await env.client.workflow.execute("traceBackgroundParent", {
+        taskQueue: "workflow-observability-test",
+        workflowId: `workflow-observability-background-${Date.now()}`,
+        args: [{ traceparent, traceLink: link }]
+      });
+    });
+
+    const parent = spans.find(span => span.name === "workflow traceBackgroundParent");
+    const child = spans.find(span => span.name === "workflow traceBackground");
+    expect(parent).toBeDefined();
+    expect(child).toBeDefined();
+    expect(parent!.traceId).toBe(traceId);
+    expect(child!.traceId).not.toBe(traceId);
+    expect(child!.parentSpanId).toBeNull();
+    expect(child!.links).toContainEqual(link);
+  }, 180_000);
+
   it("does not re-emit spans when replaying a completed history", async () => {
     spans.length = 0;
     const worker = await testWorker();

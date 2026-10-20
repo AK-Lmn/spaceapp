@@ -161,6 +161,15 @@ function childTraceparent(args: readonly unknown[] | undefined): string | null {
   return null;
 }
 
+/** The first valid span link carried by a child workflow's arguments, if any. */
+function childTraceLink(args: readonly unknown[] | undefined): WorkflowSpanLink | null {
+  for (const arg of args ?? []) {
+    const found = findTraceLink(arg, 2);
+    if (found) return found;
+  }
+  return null;
+}
+
 /**
  * Deterministic 16-hex span id per workflow run. Using the run id keeps the
  * value stable across replay, which a random id would not be.
@@ -272,6 +281,9 @@ export const interceptors: WorkflowInterceptorsFactory = () => {
             }
           });
         }
+        // A background continuation carries only a traceLink: it starts its own
+        // trace and links back to the source instead of joining this trace.
+        if (!inherited && childTraceLink(input.options.args)) return next(input);
         return next({
           ...input,
           headers: traceHeaders(headers, trace, spanId, false)

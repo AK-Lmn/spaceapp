@@ -224,10 +224,13 @@ Since 2026-10-19 the worker side exports the full workflow tree:
 
 - **Workflow span:** one INTERNAL `workflow <type>` span per realized workflow run,
   parented to the API SERVER span through the inbound `traceparent` (workflow
-  headers first, then the turn input, then the Temporal memo). It finishes when the
-  run completes, fails, is cancelled or continues as new. A workflow with no
-  inbound traceparent (memory maintenance, internal starts) gets a deterministic
-  root trace derived from its Temporal run id, so the memory workers export too.
+  headers first, then the turn input, then the Temporal memo). Turn starters, the
+  Room Agent supervisor start, Dot Goals and memory consolidation/mutation pass
+  that traceparent in a memo, so their workflow spans join the request trace. It
+  finishes when the run completes, fails, is cancelled or continues as new. A
+  workflow with no inbound traceparent (memory maintenance, internal starts) gets
+  a deterministic root trace derived from its Temporal run id, so the memory
+  workers export too.
 - **Activity span:** one INTERNAL span per activity attempt, parented to the workflow span
   through the `space-traceparent` header the workflow interceptor injects. Input
   correlation remains the fallback for activities started outside an observed
@@ -242,9 +245,10 @@ Since 2026-10-19 the worker side exports the full workflow tree:
   the run it replaced (the `space-span-link` header).
 - **Automatic background continuations:** these still start `trace:bg-<uuid>`
   because the workflow ID embeds the trace ID. The queued turn clears the copied
-  source `traceparent` so the new workflow span does not rejoin the source W3C
-  trace, and carries a `traceLink` to the source request trace, so the new
-  workflow span links back to the mission's originating trace.
+  source `traceparent`, so the new workflow starts its own W3C trace (a
+  deterministic root from its run id) and does not rejoin the source or supervisor
+  trace. It carries a `traceLink` to the source request span, so the new workflow
+  span links back to the mission's originating trace.
 
 The exported attributes are an explicit allowlist: `space.workflow_type`,
 `space.workflow_id`, `space.run_id`, `space.status`, `space.room_id`,
@@ -256,11 +260,13 @@ and the allowlist.
 - **API:** a valid inbound `traceparent` is continued (same trace ID, new span).
   An invalid or missing header gets a new trace ID. Every API log line carries
   `w3cTraceId` (Fastify `childLoggerFactory`).
-- **Propagation into turns:** API turn starters and the Room Agent coordinator add
-  the request's `traceparent` to the turn input (an optional contract field) and
-  to the Temporal memo. A bounded in-memory map from request ID to trace context
-  (`apps/api/src/trace-context.ts`) does this without passing the request object
-  through every service.
+- **Propagation into API-started workflows:** API turn starters, the Room Agent
+  supervisor start, Dot Goals and memory consolidation/mutation add the request's
+  `traceparent` to the turn input (an optional contract field) and/or the Temporal
+  memo. The workflow span parents to that traceparent's span id, which is the
+  exported API SERVER span. A bounded in-memory map from request ID to trace
+  context (`apps/api/src/trace-context.ts`) does this without passing the request
+  object through every service.
 - **Worker:** worker logs read the trace ID from the activity input. Internal
   room-action calls from the worker send a child `traceparent`, so the internal
   API request joins the same trace.

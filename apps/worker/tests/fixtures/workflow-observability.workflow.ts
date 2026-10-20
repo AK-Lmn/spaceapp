@@ -27,6 +27,14 @@ export async function traceBackground(input: { traceLink: { traceId: string; spa
   return await ping();
 }
 
+/** Parent that starts a background continuation with only a span link. */
+export async function traceBackgroundParent(input: {
+  traceparent: string; traceLink: { traceId: string; spanId: string };
+}): Promise<string> {
+  void input.traceparent;
+  return await executeChild(traceBackground, { args: [{ traceLink: input.traceLink }] });
+}
+
 /**
  * Cross-request supervisor: the child turn belongs to a different API request
  * trace, so the child keeps that trace and links back to the parent span.
